@@ -29,7 +29,7 @@ transactions, cache API, async connect, pipeline mode e keepalive automático.
 pgsamp/
 ├── CMakeLists.txt
 ├── postgres.inc                  ← include para scripts Pawn
-├── plugin/
+├── src/
 │   ├── main.cpp                  ← entrypoint (SAMP_SDK_IMPLEMENTATION)
 │   ├── natives.cpp               ← todas as Plugin_Native exportadas
 │   ├── postgres.h / .cpp         ← CallbackParam, Log, FireCallback
@@ -37,9 +37,10 @@ pgsamp/
 │   ├── connection_manager.h/.cpp ← pool de conexões, keepalive thread
 │   ├── result.h / .cpp           ← PgResult + ResultManager
 │   └── thread_pool.h / .cpp      ← execução assíncrona (TaskType: Query/PreparedQuery/Transaction/AsyncConnect)
-└── samp-sdk/                     ← clonar aldergrounds/samp-sdk aqui
-    └── sdk/
-        └── samp_sdk.hpp
+└── libs/
+    └── samp-sdk/                 ← clonar aldergrounds/samp-sdk aqui
+        └── sdk/
+            └── samp_sdk.hpp
 ```
 
 ---
@@ -50,7 +51,7 @@ pgsamp/
 |---|---|---|
 | CMake | 3.16 | |
 | libpq (PostgreSQL C Client Library) | 16 | deve ser **32-bit** |
-| aldergrounds/samp-sdk | latest | header-only, clonar em `samp-sdk/` |
+| aldergrounds/samp-sdk | latest | header-only, clonar em `libs/samp-sdk/` |
 | Compilador C++ | C++17 | GCC 8+, Clang 5+, MSVC 2017+ |
 
 ---
@@ -66,7 +67,7 @@ pgsamp/
    Anote o caminho, ex.: `C:\pgsql16`.
 4. Clone o SDK:
    ```
-   git clone https://github.com/aldergrounds/samp-sdk.git samp-sdk
+   git clone https://github.com/aldergrounds/samp-sdk.git libs/samp-sdk
    ```
 
 ### Passo a passo
@@ -118,7 +119,7 @@ sudo apt-get install -y \
     libssl-dev:i386
 
 # Clone o SDK
-git clone https://github.com/aldergrounds/samp-sdk.git samp-sdk
+git clone https://github.com/aldergrounds/samp-sdk.git libs/samp-sdk
 ```
 
 > **CentOS/RHEL equivalente:**
