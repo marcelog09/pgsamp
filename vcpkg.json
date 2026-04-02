@@ -1,0 +1,11 @@
+{
+    "name": "pgsamp",
+    "version": "1.0.0",
+    "builtin-baseline": "4580816534ed8fd9634ac83d46471440edd82dfe",
+    "dependencies": [
+        {
+            "name": "libpq",
+            "platform": "windows"
+        }
+    ]
+}

@@ -1,0 +1,3 @@
+[submodule "libs/samp-sdk"]
+	path = libs/samp-sdk
+	url = https://github.com/aldergrounds/samp-sdk.git
