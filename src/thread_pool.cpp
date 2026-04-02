@@ -295,6 +295,9 @@ namespace PgPlugin
 
             if (!qr.callback.empty())
                 PgPlugin::FireCallback(qr.callback, qr.result_handle, qr.extra_params);
+            else if (qr.result_handle != 0)
+                // No callback to consume this result — free it now to prevent a leak.
+                ResultManager::Instance().Free(qr.result_handle);
 
             local.pop();
         }

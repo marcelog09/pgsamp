@@ -124,10 +124,14 @@ namespace PgPlugin
         conn_obj->info.database = database;
         conn_obj->info.port = port;
 
+        // Reserve the handle atomically before connecting, so concurrent Open()
+        // calls always get distinct handle IDs (avoids TOCTOU race).
+        int id;
         {
             std::lock_guard<std::mutex> lock(map_mutex_);
-            conn_obj->handle_id = next_handle_;
+            id = next_handle_++;
         }
+        conn_obj->handle_id = id;
 
         if (!conn_obj->Connect())
         {
@@ -135,7 +139,6 @@ namespace PgPlugin
         }
 
         std::lock_guard<std::mutex> lock(map_mutex_);
-        int id = next_handle_++;
         connections_[id] = std::move(conn_obj);
         ++map_generation_;
         return id;

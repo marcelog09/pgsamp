@@ -64,11 +64,17 @@ namespace PgPlugin
         std::vsnprintf(buf, sizeof(buf), format, args);
         va_end(args);
 
-        // Timestamp
+        // Timestamp — use thread-safe variants to avoid data races on the
+        // static buffer returned by std::localtime.
         time_t now = std::time(nullptr);
         char tbuf[32];
-        struct tm *tm_info = std::localtime(&now);
-        std::strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", tm_info);
+        struct tm tm_info;
+#if defined(_WIN32)
+        localtime_s(&tm_info, &now);
+#else
+        localtime_r(&now, &tm_info);
+#endif
+        std::strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", &tm_info);
 
         // Server console
         if (g_logprintf)

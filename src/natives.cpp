@@ -39,6 +39,8 @@
  *
  *   pg_enter_pipeline_mode(connection_handle)                                    -> bool
  *   pg_exit_pipeline_mode(connection_handle)                                     -> bool
+ *
+ *   pg_format(connection_handle, output[], size, format[], {Float,_}:...)        -> int
  */
 
 #define SAMP_SDK_WANT_AMX_EVENTS
@@ -1071,4 +1073,193 @@ Plugin_Native(pg_exit_pipeline_mode, AMX *amx, cell *params)
     }
     conn->pipeline_mode = false;
     return 1;
+}
+
+// ============================================================
+// ============================================================
+//  FORMAT HELPER
+// ============================================================
+// ============================================================
+
+// ============================================================
+// pg_format(connection_handle, output[], size, const format[], {Float,_}:...)
+// Formats a SQL query string in-place, similar to mysql_format.
+//
+// Specifiers:
+//   %d / %i  — integer
+//   %f       — float
+//   %s       — raw string (no escaping)
+//   %e       — PQescapeLiteral  (escapes + wraps in single quotes)
+//   %E       — PQescapeIdentifier (escapes + wraps in double quotes)
+//   %%       — literal '%'
+//
+// Returns number of characters written (excluding null terminator),
+// or -1 on error.
+// ============================================================
+Plugin_Native(pg_format, AMX *amx, cell *params)
+{
+    int num_params = static_cast<int>(params[0] / sizeof(cell));
+    if (num_params < 4)
+        return -1;
+
+    Native_Params p(amx, params);
+    int conn_handle = p.Get<int>(0);
+    // params[2] = output[] address, params[3] = size, params[4] = format[]
+    int size = p.Get<int>(2);
+    std::string fmt = p.Get<std::string>(3);
+
+    if (size <= 0)
+        return -1;
+
+    cell *out_ptr = nullptr;
+    if (amx::Get_Addr(amx, params[2], &out_ptr) != 0 || !out_ptr)
+        return -1;
+
+    Connection *conn = ConnectionManager::Instance().Get(conn_handle);
+    if (!conn || !conn->conn)
+    {
+        Log("[ERROR] pg_format: invalid connection handle %d", conn_handle);
+        return -1;
+    }
+
+    // max useful result length is size-1 characters
+    const std::size_t max_len = static_cast<std::size_t>(size - 1);
+
+    std::string result;
+    result.reserve(std::min<std::size_t>(fmt.size() * 2, max_len));
+
+    int arg_idx = 0;
+    int max_args = num_params - 4; // params[5..n] are varargs
+
+    for (std::size_t i = 0; i < fmt.size() && result.size() < max_len; ++i)
+    {
+        if (fmt[i] != '%')
+        {
+            result += fmt[i];
+            continue;
+        }
+
+        ++i; // advance to specifier character
+        if (i >= fmt.size())
+            break;
+
+        char spec = fmt[i];
+
+        if (spec == '%')
+        {
+            result += '%';
+            continue;
+        }
+
+        if (arg_idx >= max_args)
+        {
+            Log("[WARN] pg_format: not enough arguments for format string (handle %d)", conn_handle);
+            break;
+        }
+
+        // params[] is 1-based: params[1]=arg0 ... params[5]=first vararg
+        int raw_idx = 5 + arg_idx;
+        cell *vaddr = nullptr;
+
+        switch (spec)
+        {
+        case 'd':
+        case 'i':
+            if (amx::Get_Addr(amx, params[raw_idx], &vaddr) == 0 && vaddr)
+            {
+                char buf[32];
+                snprintf(buf, sizeof(buf), "%d", static_cast<int>(*vaddr));
+                result += buf;
+            }
+            ++arg_idx;
+            break;
+
+        case 'f':
+            if (amx::Get_Addr(amx, params[raw_idx], &vaddr) == 0 && vaddr)
+            {
+                float fval = amx::AMX_CTOF(*vaddr);
+                // Guard against NaN/Infinity — they are not valid SQL literals
+                if (fval != fval || fval == fval + 1.0f) // NaN or Inf check
+                {
+                    Log("[WARN] pg_format: NaN or Infinity passed as %%f arg %d (handle %d) — substituting 0.0",
+                        arg_idx, conn_handle);
+                    result += "0.0";
+                }
+                else
+                {
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "%f", fval);
+                    result += buf;
+                }
+            }
+            ++arg_idx;
+            break;
+
+        case 's':
+            // WARNING: %s performs NO escaping. Only use with trusted/hardcoded
+            // strings. For player-provided input always use %e instead.
+            {
+                std::string sval = Samp_SDK::Get_String(amx, params[raw_idx]);
+                result += sval;
+                ++arg_idx;
+                break;
+            }
+
+        case 'e': // PQescapeLiteral — escapes and wraps in single quotes
+        {
+            std::string sval = Samp_SDK::Get_String(amx, params[raw_idx]);
+            char *escaped = PQescapeLiteral(conn->conn, sval.c_str(), sval.size());
+            if (escaped)
+            {
+                result += escaped;
+                PQfreemem(escaped);
+            }
+            else
+            {
+                Log("[WARN] pg_format: PQescapeLiteral failed for arg %d (handle %d)",
+                    arg_idx, conn_handle);
+                result += "''";
+            }
+            ++arg_idx;
+            break;
+        }
+
+        case 'E': // PQescapeIdentifier — escapes and wraps in double quotes
+        {
+            std::string sval = Samp_SDK::Get_String(amx, params[raw_idx]);
+            char *escaped = PQescapeIdentifier(conn->conn, sval.c_str(), sval.size());
+            if (escaped)
+            {
+                result += escaped;
+                PQfreemem(escaped);
+            }
+            else
+            {
+                Log("[WARN] pg_format: PQescapeIdentifier failed for arg %d (handle %d)",
+                    arg_idx, conn_handle);
+                result += "\"\"";
+            }
+            ++arg_idx;
+            break;
+        }
+
+        default:
+            Log("[WARN] pg_format: unknown specifier '%%%c' at position %zu (handle %d)",
+                spec, i, conn_handle);
+            result += '%';
+            result += spec;
+            break;
+        }
+    }
+
+    // Write result into Pawn output buffer (cell by cell)
+    std::size_t copy_len = static_cast<std::size_t>(size - 1);
+    if (result.size() < copy_len)
+        copy_len = result.size();
+
+    for (std::size_t i = 0; i < copy_len; ++i)
+        out_ptr[i] = static_cast<cell>(static_cast<unsigned char>(result[i]));
+    out_ptr[copy_len] = 0;
+
+    return static_cast<cell>(copy_len);
 }
