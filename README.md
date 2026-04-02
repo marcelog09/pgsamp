@@ -321,6 +321,44 @@ format(query, sizeof query,
 pg_query(g_conn, query, "OnResultado");
 ```
 
+### pg_format — formatação segura de queries
+
+`pg_format` funciona como `mysql_format`: monta a query já com os valores escapados,  
+sem precisar de chamadas separadas a `pg_escape_literal`.
+
+**Especificadores:**
+
+| Especificador | Tipo | Comportamento |
+|---|---|---|
+| `%d` / `%i` | inteiro | Inserido diretamente |
+| `%f` | float | Inserido diretamente |
+| `%s` | string | **Sem escape** — use só com valores confiáveis |
+| `%e` | string | `PQescapeLiteral` — envolve em aspas simples (`'valor'`) |
+| `%E` | string | `PQescapeIdentifier` — envolve em aspas duplas (`"tabela"`) |
+| `%%` | literal | Insere um `%` |
+
+```pawn
+// INSERT com escape automático de strings (recomendado)
+new query[512];
+pg_format(g_conn, query, sizeof query,
+    "INSERT INTO chat_log (nick, conta_id, mensagem, momento) "
+    "VALUES (%e, %d, %e, TO_TIMESTAMP(%d))",
+    P_Nome[playerid],
+    PlayerInfo[playerid][IDConta],
+    texto,
+    gettime()
+);
+pg_query(g_conn, query, "");
+
+// Nome de tabela dinâmico via %E (escape de identificador)
+new tabela[] = "jogadores", busca[] = "O'Brien";
+pg_format(g_conn, query, sizeof query,
+    "SELECT * FROM %E WHERE nome = %e",
+    tabela, busca
+);
+// resultado: SELECT * FROM "jogadores" WHERE nome = 'O''Brien'
+```
+
 ### Pipeline Mode (PostgreSQL 14+)
 
 ```pawn
@@ -393,6 +431,7 @@ pg_exit_pipeline_mode(g_conn);
 | `pg_escape_string(conn, input, output[], size)` | Escape básico, sem aspas. |
 | `pg_escape_literal(conn, input, output[], size)` | Escape com aspas simples (`'valor'`). |
 | `pg_escape_identifier(conn, input, output[], size)` | Escape com aspas duplas (`"tabela"`). |
+| `pg_format(conn, output[], size, format[], ...)` | Formata query com escape embutido. Especificadores: `%d` `%f` `%s` `%e` (literal) `%E` (identificador) `%%`. |
 
 ### Pipeline
 | Native | Descrição |
@@ -434,6 +473,6 @@ O plugin grava em `logs/plugins/postgres.log` (relativo à pasta do servidor):
 
 ## Segurança
 
-- **Nunca** construa queries concatenando strings diretamente. Use `pg_escape_string` ou (recomendado) queries parametrizadas via stored procedures.
+- **Nunca** construa queries concatenando strings diretamente. Use `pg_format` com `%e`/`%E` (recomendado) ou `pg_escape_literal`/`pg_escape_identifier` separadamente.
 - O plugin **não armazena** credenciais após a conexão ser estabelecida; a string de conexão fica apenas dentro do `PQconnectdb` call.
 - Toda comunicação entre threads e main thread usa filas protegidas por mutex — sem corridas de dados.
