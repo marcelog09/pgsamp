@@ -109,7 +109,7 @@ bool OnLoad()
     // Start background keepalive — pings all connections every 60 s
     PgPlugin::ConnectionManager::Instance().StartKeepalive();
 
-    PgPlugin::Log("PostgreSQL plugin loaded. Version 2.0.0 (SA-MP / open.mp)");
+    PgPlugin::Log("PostgreSQL plugin loaded. Version 1.0.0 (SA-MP / open.mp)");
     return true;
 }
 
