@@ -155,7 +155,20 @@ build/output/pgsamp.so
    ```
    plugins pgsamp.so
    ```
-4. O servidor precisará do `libpq.so` 32-bit disponível (`ldconfig` ou `LD_LIBRARY_PATH`).
+4. O `libpq.so` 32-bit precisa estar acessível ao dynamic linker. **Não basta** colocar o arquivo na raiz do servidor — o Linux não busca no diretório atual. Use uma das opções abaixo:
+
+   **Opção A — via sistema (recomendada):** instale o pacote `libpq-dev:i386` (já feito na etapa de pré-requisitos). O `.so` ficará em `/usr/lib/i386-linux-gnu/` e será encontrado automaticamente.
+
+   **Opção B — via `LD_LIBRARY_PATH`:** se a biblioteca estiver em um diretório personalizado, exporte a variável antes de iniciar o servidor:
+   ```bash
+   export LD_LIBRARY_PATH=/caminho/para/libpq:$LD_LIBRARY_PATH
+   ./samp03svr
+   ```
+
+   **Opção C — via `ldconfig`:** copie o `.so` para `/usr/lib/i386-linux-gnu/` e rode:
+   ```bash
+   sudo ldconfig
+   ```
 
 ---
 

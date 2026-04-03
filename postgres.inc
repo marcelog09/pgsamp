@@ -13,6 +13,7 @@
 //    7. Advanced escaping       (pg_escape_literal, pg_escape_identifier)
 //    8. Pipeline mode           (pg_enter_pipeline_mode, pg_exit_pipeline_mode)
 //    9. Built-in keepalive      (automatic, runs every 60 s internally)
+//   10. Charset conversion      (pg_set_charset_latin1)
 // =============================================================================
 
 #if defined _postgres_included
@@ -444,8 +445,32 @@ native pg_enter_pipeline_mode(PG:connection_handle);
 native pg_exit_pipeline_mode(PG:connection_handle);
 
 // =============================================================================
-//  STANDARD CALLBACKS
+//  CHARSET / ENCODING
 // =============================================================================
+
+/**
+ * pg_set_charset_latin1(bool:enable)
+ *
+ * Enables or disables automatic re-encoding of Pawn string arguments from
+ * Latin-1 (ISO-8859-1) to UTF-8 before they are sent to PostgreSQL.
+ *
+ * By default the conversion is OFF. Enable it in OnGameModeInit when:
+ *   - The server runs on Linux SA-MP / open.mp (strings are Latin-1), AND
+ *   - The PostgreSQL cluster expects UTF-8 (default on Ubuntu 24+).
+ *
+ * Affected natives: pg_format (%s / %e / %E), pg_escape_string,
+ *                   pg_escape_literal, pg_escape_identifier.
+ *
+ * @param  enable  1 to enable conversion, 0 to disable.
+ * @return         Previous state (1 = was enabled, 0 = was disabled).
+ *
+ * Example:
+ *   public OnGameModeInit() {
+ *       pg_set_charset_latin1(1);
+ *       // ...
+ *   }
+ */
+native pg_set_charset_latin1(bool:enable);
 
 /**
  * Standard async-query callback forwarded here for documentation purposes.

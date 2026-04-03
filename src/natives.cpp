@@ -54,11 +54,101 @@
 #include <libpq-fe.h>
 #include <string>
 #include <cstring>
+#include <atomic>
 
 using namespace PgPlugin;
 // Import only what we need from Samp_SDK to avoid ambiguity with PgPlugin::Log
 using Samp_SDK::Native_Params;
 namespace amx = Samp_SDK::amx;
+
+// ============================================================
+// Global flag: when true, string arguments are re-encoded from
+// Latin-1 (ISO-8859-1) to UTF-8 before being sent to PostgreSQL.
+// Disabled by default; enable via pg_set_charset_latin1(1) in
+// OnGameModeInit when the server uses Latin-1 encoded strings
+// (typical on Linux SA-MP / open.mp servers).
+static std::atomic<bool> g_latin1_convert{false};
+
+// ============================================================
+// Returns true if 'in' is valid UTF-8 (including pure ASCII).
+// Used to avoid double-encoding strings that are already UTF-8.
+static bool is_valid_utf8(const std::string &in)
+{
+    const unsigned char *p = reinterpret_cast<const unsigned char *>(in.data());
+    const unsigned char *end = p + in.size();
+    while (p < end)
+    {
+        unsigned char c = *p;
+        if (c < 0x80)
+        {
+            ++p;
+            continue;
+        } // ASCII — always valid
+
+        int extra;
+        if ((c & 0xE0) == 0xC0)
+            extra = 1; // 2-byte sequence
+        else if ((c & 0xF0) == 0xE0)
+            extra = 2; // 3-byte sequence
+        else if ((c & 0xF8) == 0xF0)
+            extra = 3; // 4-byte sequence
+        else
+            return false; // invalid lead byte
+
+        ++p;
+        for (int i = 0; i < extra; ++i, ++p)
+        {
+            if (p >= end || (*p & 0xC0) != 0x80)
+                return false; // missing or invalid continuation byte
+        }
+    }
+    return true;
+}
+
+// ============================================================
+// Re-encodes 'in' from Latin-1 to UTF-8 only when ALL conditions
+// are met:
+//   1. g_latin1_convert is enabled.
+//   2. The PostgreSQL session's client_encoding is "UTF8".
+//      If it is LATIN1, WIN1252, etc., the server already
+//      handles transcoding internally — converting here too
+//      would cause double-encoding (e.g. "vocÃª" instead of
+//      "você").
+//   3. The string is NOT already valid UTF-8.
+// Strings that are pure ASCII or already UTF-8 are returned
+// unchanged, avoiding any unnecessary allocation.
+static std::string maybe_latin1_to_utf8(const std::string &in, PGconn *conn)
+{
+    if (!g_latin1_convert.load(std::memory_order_relaxed))
+        return in;
+
+    // Only convert when the server session expects UTF-8 bytes.
+    // On Windows the default client_encoding is often WIN1252 or
+    // LATIN1, meaning libpq/the server transcodes automatically.
+    if (conn)
+    {
+        const char *enc = PQparameterStatus(conn, "client_encoding");
+        if (!enc || strcmp(enc, "UTF8") != 0)
+            return in;
+    }
+
+    if (is_valid_utf8(in))
+        return in; // already ASCII or valid UTF-8 — nothing to do
+
+    std::string out;
+    out.reserve(in.size() * 2);
+    for (unsigned char c : in)
+    {
+        if (c < 0x80)
+            out += static_cast<char>(c);
+        else
+        {
+            out += static_cast<char>(0xC0 | (c >> 6));
+            out += static_cast<char>(0x80 | (c & 0x3F));
+        }
+    }
+    return out;
+}
 
 // ============================================================
 // pg_connect(host[], user[], password[], database[], port)
@@ -318,13 +408,14 @@ Plugin_Native(pg_escape_string, AMX *amx, cell *params)
 
     Native_Params p(amx, params);
     int conn_handle = p.Get<int>(0);
-    std::string input = p.Get<std::string>(1);
     int size = p.Get<int>(3);
 
     if (size <= 0)
         return 0;
 
     Connection *conn = ConnectionManager::Instance().Get(conn_handle);
+    std::string input = maybe_latin1_to_utf8(p.Get<std::string>(1),
+                                             (conn ? conn->conn : nullptr));
 
     // Allocate escape buffer: at most 2*len+1 per libpq docs
     std::string escaped(input.size() * 2 + 1, '\0');
@@ -882,7 +973,6 @@ Plugin_Native(pg_escape_literal, AMX *amx, cell *params)
 
     Native_Params p(amx, params);
     int conn_handle = p.Get<int>(0);
-    std::string input = p.Get<std::string>(1);
     // params[3] = output[] address, params[4] = size
     int size = p.Get<int>(3);
 
@@ -896,6 +986,7 @@ Plugin_Native(pg_escape_literal, AMX *amx, cell *params)
         return 0;
     }
 
+    std::string input = maybe_latin1_to_utf8(p.Get<std::string>(1), conn->conn);
     char *escaped = PQescapeLiteral(conn->conn, input.c_str(), input.size());
     if (!escaped)
     {
@@ -934,7 +1025,6 @@ Plugin_Native(pg_escape_identifier, AMX *amx, cell *params)
 
     Native_Params p(amx, params);
     int conn_handle = p.Get<int>(0);
-    std::string input = p.Get<std::string>(1);
     // params[3] = output[] address, params[4] = size
     int size = p.Get<int>(3);
 
@@ -948,6 +1038,7 @@ Plugin_Native(pg_escape_identifier, AMX *amx, cell *params)
         return 0;
     }
 
+    std::string input = maybe_latin1_to_utf8(p.Get<std::string>(1), conn->conn);
     char *escaped = PQescapeIdentifier(conn->conn, input.c_str(), input.size());
     if (!escaped)
     {
@@ -1199,7 +1290,7 @@ Plugin_Native(pg_format, AMX *amx, cell *params)
             // WARNING: %s performs NO escaping. Only use with trusted/hardcoded
             // strings. For player-provided input always use %e instead.
             {
-                std::string sval = Samp_SDK::Get_String(amx, params[raw_idx]);
+                std::string sval = maybe_latin1_to_utf8(Samp_SDK::Get_String(amx, params[raw_idx]), conn->conn);
                 result += sval;
                 ++arg_idx;
                 break;
@@ -1207,7 +1298,7 @@ Plugin_Native(pg_format, AMX *amx, cell *params)
 
         case 'e': // PQescapeLiteral — escapes and wraps in single quotes
         {
-            std::string sval = Samp_SDK::Get_String(amx, params[raw_idx]);
+            std::string sval = maybe_latin1_to_utf8(Samp_SDK::Get_String(amx, params[raw_idx]), conn->conn);
             char *escaped = PQescapeLiteral(conn->conn, sval.c_str(), sval.size());
             if (escaped)
             {
@@ -1226,7 +1317,7 @@ Plugin_Native(pg_format, AMX *amx, cell *params)
 
         case 'E': // PQescapeIdentifier — escapes and wraps in double quotes
         {
-            std::string sval = Samp_SDK::Get_String(amx, params[raw_idx]);
+            std::string sval = maybe_latin1_to_utf8(Samp_SDK::Get_String(amx, params[raw_idx]), conn->conn);
             char *escaped = PQescapeIdentifier(conn->conn, sval.c_str(), sval.size());
             if (escaped)
             {
@@ -1262,4 +1353,31 @@ Plugin_Native(pg_format, AMX *amx, cell *params)
     out_ptr[copy_len] = 0;
 
     return static_cast<cell>(copy_len);
+}
+
+// ============================================================
+// pg_set_charset_latin1(bool enable)
+//
+// Enables or disables automatic Latin-1 → UTF-8 re-encoding of
+// all string arguments passed to pg_format (%s/%e/%E),
+// pg_escape_string, pg_escape_literal and pg_escape_identifier.
+//
+// Enable this in OnGameModeInit when your server runs on a
+// Linux SA-MP / open.mp instance that uses Latin-1 strings
+// (the default) and your PostgreSQL cluster expects UTF-8
+// (the default on Ubuntu 24+).
+//
+// @param  enable  1 to enable conversion, 0 to disable.
+// @return         Previous state (1 = was enabled, 0 = was disabled).
+// ============================================================
+Plugin_Native(pg_set_charset_latin1, AMX *amx, cell *params)
+{
+    if (params[0] / sizeof(cell) < 1)
+        return 0;
+
+    bool enable = (Native_Params(amx, params).Get<int>(0) != 0);
+    bool previous = g_latin1_convert.exchange(enable, std::memory_order_relaxed);
+    Log("[INFO] pg_set_charset_latin1: Latin-1 to UTF-8 conversion %s",
+        enable ? "enabled" : "disabled");
+    return previous ? 1 : 0;
 }
